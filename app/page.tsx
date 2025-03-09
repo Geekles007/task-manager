@@ -60,6 +60,27 @@ const initialIssues: Issue[] = [
     dueDate: 'May 10',
     labels: ['Performance', 'Frontend'],
   },
+  {
+    id: 'LIN-6',
+    title: 'Implement dark mode toggle',
+    status: 'todo',
+    priority: 'medium',
+    assignee: {
+      name: 'Mike Brown',
+    },
+    labels: ['UI', 'Feature'],
+  },
+  {
+    id: 'LIN-7',
+    title: 'Fix search functionality',
+    status: 'in-progress',
+    priority: 'high',
+    assignee: {
+      name: 'Lisa Chen',
+    },
+    dueDate: 'May 20',
+    labels: ['Bug', 'Frontend'],
+  },
 ];
 
 export default function Home() {
@@ -113,10 +134,13 @@ export default function Home() {
         />
         <div className="flex flex-1 overflow-hidden relative">
           <div className={`flex-1 overflow-auto ${showRightSidebar && isMobile ? 'hidden md:block' : ''}`}>
-            <IssuesList 
-              issues={issues} 
-              onIssuesReorder={handleIssuesReorder}
-            />
+            <div className="max-w-4xl mx-auto px-4">
+              <IssuesList 
+                issues={issues} 
+                onIssuesReorder={handleIssuesReorder}
+                className="py-4"
+              />
+            </div>
           </div>
           
           {/* Right sidebar - conditionally shown on mobile */}

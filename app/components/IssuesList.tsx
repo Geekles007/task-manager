@@ -126,7 +126,7 @@ export const IssuesList: FC<IssuesListProps> = ({
   const activeIssue = issues.find((issue) => issue.id === activeId);
 
   return (
-    <div className={cn("p-4", className)}>
+    <div className={cn("", className)}>
       {issues.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4">
@@ -145,7 +145,7 @@ export const IssuesList: FC<IssuesListProps> = ({
           onDragEnd={handleDragEnd}
         >
           <SortableContext items={issues.map(issue => issue.id)} strategy={verticalListSortingStrategy}>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            <div className="flex flex-col space-y-3">
               {issues.map((issue) => (
                 <IssueCard
                   key={issue.id}
