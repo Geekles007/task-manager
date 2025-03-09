@@ -100,144 +100,26 @@ export const CallProvider = ({ children }: CallProviderProps) => {
     }
   }, []);
   
-  // Handle muting
+  // Handle socket events for call signaling
   useEffect(() => {
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !isMuted;
-      });
-    }
-  }, [isMuted]);
-  
-  // Create a WebRTC peer connection
-  const createPeerConnection = useCallback(async (isInitiator: boolean, callId: string, remoteUserId: string) => {
-    debug(`Creating peer connection as ${isInitiator ? 'initiator' : 'receiver'} for call ${callId} with ${remoteUserId}`);
-    
-    try {
-      // Get user media
-      debug('Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      debug('Microphone access granted');
-      streamRef.current = stream;
-      
-      // Create peer connection
-      debug('Creating SimplePeer instance');
-      const peer = new SimplePeer({
-        initiator: isInitiator,
-        trickle: false,
-        stream,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
-        }
-      });
-      
-      // Store peer in ref for cleanup
-      peerRef.current = peer;
-      
-      // Set up peer event handlers
-      peer.on('signal', (data: SimplePeer.SignalData) => {
-        debug(`Sending signal to ${remoteUserId}`, data);
-        if (socket && socket.connected) {
-          socket.emit('signal', {
-            callId,
-            signal: data,
-            targetId: remoteUserId,
-          });
-        } else {
-          debug('Socket not connected, cannot send signal');
-        }
-      });
-      
-      peer.on('connect', () => {
-        debug('Peer connection established');
-        // Update call status if not already connected
-        setCurrentCall(prev => {
-          if (prev && prev.status !== 'connected') {
-            debug('Updating call status to connected');
-            return { ...prev, status: 'connected' };
-          }
-          return prev;
-        });
-      });
-      
-      peer.on('stream', (remoteStream: MediaStream) => {
-        debug('Received remote stream');
-        if (audioRef.current) {
-          audioRef.current.srcObject = remoteStream;
-        }
-      });
-      
-      peer.on('data', (data: any) => {
-        debug('Received data:', data.toString());
-      });
-      
-      peer.on('error', (err: Error) => {
-        debug('Peer error:', err);
-        endCall();
-      });
-      
-      peer.on('close', () => {
-        debug('Peer connection closed');
-      });
-      
-      // Update call with peer
-      setCurrentCall(prev => {
-        if (prev) {
-          return { ...prev, peer };
-        }
-        return prev;
-      });
-      
-      return peer;
-    } catch (err) {
-      debug('Error creating peer connection:', err);
-      throw err;
-    }
-  }, [socket]);
-  
-  // Socket event listeners
-  useEffect(() => {
-    if (!socket) return;
+    if (!socket || !isConnected) return;
     
     // Handle incoming call
     socket.on('call:incoming', ({ callId, callerId, callerName }) => {
       debug('Incoming call:', { callId, callerId, callerName });
-      
-      // Only accept incoming calls if we're not already in a call
-      if (!currentCall) {
-        setIncomingCall({ callId, callerId, callerName });
-      } else {
-        // Auto-reject if we're already in a call
-        debug('Auto-rejecting call because we are already in a call');
-        socket.emit('call:reject', { callId, targetId: callerId });
-      }
+      setIncomingCall({ callId, callerId, callerName });
     });
     
     // Handle call accepted
-    socket.on('call:accepted', async ({ callId, targetId }) => {
+    socket.on('call:accepted', ({ callId, targetId }) => {
       debug('Call accepted:', { callId, targetId });
       
       if (currentCall && currentCall.id === callId) {
-        // Update call status immediately
-        setCurrentCall(prev => {
-          if (prev) {
-            return { ...prev, status: 'connected' };
-          }
-          return prev;
-        });
+        // Update call status
+        setCurrentCall(prev => prev ? { ...prev, status: 'connected' } : null);
         
-        try {
-          // Create peer connection as initiator
-          await createPeerConnection(true, callId, targetId);
-        } catch (err) {
-          debug('Error in call:accepted handler:', err);
-          endCall();
-        }
-      } else {
-        debug('Received call:accepted but no matching call found');
+        // Initialize WebRTC connection as the caller
+        initializeWebRTC(callId, targetId, true);
       }
     });
     
@@ -246,12 +128,7 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       debug('Call rejected:', callId);
       
       if (currentCall && currentCall.id === callId) {
-        setCurrentCall(prev => {
-          if (prev) {
-            return { ...prev, status: 'rejected' };
-          }
-          return prev;
-        });
+        setCurrentCall(prev => prev ? { ...prev, status: 'rejected' } : null);
         
         // Clean up after a short delay
         setTimeout(() => {
@@ -265,76 +142,45 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       debug('Call ended:', { callId, endedBy, reason });
       
       if (currentCall && currentCall.id === callId) {
-        // Clean up peer connection
-        if (peerRef.current) {
-          peerRef.current.destroy();
-          peerRef.current = null;
-        }
+        setCurrentCall(prev => prev ? { ...prev, status: 'ended' } : null);
         
-        // Update call status
-        setCurrentCall(prev => {
-          if (prev) {
-            return { ...prev, status: 'ended', endTime: Date.now() };
-          }
-          return prev;
-        });
+        // Clean up WebRTC
+        cleanupWebRTC();
         
         // Clean up after a short delay
         setTimeout(() => {
           setCurrentCall(null);
         }, 3000);
-        
-        // Clean up media stream
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-          streamRef.current = null;
-        }
       }
       
-      // Clear any incoming call
-      setIncomingCall(null);
+      // Also clear any incoming call if it matches
+      if (incomingCall && incomingCall.callId === callId) {
+        setIncomingCall(null);
+      }
     });
     
     // Handle WebRTC signaling
     socket.on('signal', ({ callId, signal, fromId }) => {
-      debug('Received signal from peer:', fromId, signal);
+      debug('Signal received:', { callId, fromId });
       
-      if (currentCall && currentCall.id === callId && currentCall.peer) {
-        debug('Applying signal to peer');
-        currentCall.peer.signal(signal);
-      } else if (currentCall && currentCall.id === callId) {
-        debug('Received signal but peer not yet created, creating now');
-        // This can happen if the signal arrives before the peer is created
-        // Create the peer now
-        createPeerConnection(false, callId, fromId)
-          .then(peer => {
-            debug('Peer created, applying signal');
-            peer.signal(signal);
-          })
-          .catch(err => {
-            debug('Error creating peer from signal:', err);
-          });
-      } else {
-        debug('Received signal but no matching call found');
+      if (currentCall && currentCall.id === callId) {
+        try {
+          if (peerRef.current) {
+            debug('Applying signal to peer');
+            peerRef.current.signal(signal);
+          } else {
+            debug('Peer not initialized yet, cannot apply signal');
+          }
+        } catch (err) {
+          console.error('Error applying signal:', err);
+        }
       }
     });
     
     // Handle call errors
     socket.on('call:error', ({ message }) => {
-      debug('Call error:', message);
-      
-      // Clean up current call
-      if (currentCall) {
-        if (peerRef.current) {
-          peerRef.current.destroy();
-          peerRef.current = null;
-        }
-        
-        setCurrentCall(null);
-      }
-      
-      // Clear any incoming call
-      setIncomingCall(null);
+      console.error('Call error:', message);
+      // You could show a toast or notification here
     });
     
     return () => {
@@ -345,88 +191,153 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       socket.off('signal');
       socket.off('call:error');
     };
-  }, [socket, currentCall, createPeerConnection]);
+  }, [socket, isConnected, currentCall, incomingCall]);
+  
+  // Initialize WebRTC connection
+  const initializeWebRTC = async (callId: string, peerId: string, initiator: boolean) => {
+    debug('Initializing WebRTC:', { callId, peerId, initiator });
+    
+    try {
+      // Request user media
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      // Apply mute state if needed
+      if (isMuted) {
+        stream.getAudioTracks().forEach(track => {
+          track.enabled = false;
+        });
+      }
+      
+      // Create peer connection
+      const peer = new SimplePeer({
+        initiator,
+        stream,
+        trickle: true,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:global.stun.twilio.com:3478' }
+          ]
+        }
+      });
+      
+      peerRef.current = peer;
+      
+      // Handle peer events
+      peer.on('signal', (data) => {
+        debug('Generated signal data, sending to peer:', peerId);
+        socket?.emit('signal', {
+          callId,
+          signal: data,
+          targetId: peerId
+        });
+      });
+      
+      peer.on('stream', (remoteStream) => {
+        debug('Received remote stream');
+        if (audioRef.current) {
+          audioRef.current.srcObject = remoteStream;
+        }
+      });
+      
+      peer.on('error', (err) => {
+        console.error('Peer connection error:', err);
+        cleanupWebRTC();
+        setCurrentCall(prev => prev ? { ...prev, status: 'ended' } : null);
+      });
+      
+      peer.on('close', () => {
+        debug('Peer connection closed');
+        cleanupWebRTC();
+      });
+      
+      return peer;
+    } catch (err) {
+      console.error('Error initializing WebRTC:', err);
+      return null;
+    }
+  };
+  
+  // Clean up WebRTC resources
+  const cleanupWebRTC = () => {
+    debug('Cleaning up WebRTC resources');
+    
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+    }
+  };
   
   // Start a call
-  const startCall = useCallback(async (targetId: string, targetName: string) => {
+  const startCall = useCallback((targetId: string, targetName: string) => {
     if (!socket || !isConnected) {
-      debug('Cannot start call: Socket not connected');
+      console.error('Cannot start call: Socket not connected');
       return;
     }
     
-    if (currentCall) {
-      debug('Already in a call');
-      return;
-    }
+    debug('Starting call to:', { targetId, targetName });
     
-    debug(`Starting call to ${targetName} (${targetId})`);
+    socket.emit('call:start', {
+      callerId: SESSION_USER_ID,
+      callerName: SESSION_USER_NAME,
+      targetId
+    });
     
-    // Create a new call
-    const callId = `call-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const newCall: Call = {
-      id: callId,
+    // Create a temporary call object until we get confirmation
+    setCurrentCall({
+      id: 'pending', // Will be replaced with actual ID from server
       callerId: SESSION_USER_ID,
       callerName: SESSION_USER_NAME,
       targetId,
       targetName,
       status: 'ringing',
-      startTime: Date.now(),
-    };
-    
-    setCurrentCall(newCall);
-    
-    // Emit call:start event
-    socket.emit('call:start', {
-      callerId: SESSION_USER_ID,
-      callerName: SESSION_USER_NAME,
-      targetId,
+      startTime: Date.now()
     });
-  }, [socket, isConnected, currentCall]);
+  }, [socket, isConnected]);
   
   // Accept an incoming call
   const acceptCall = useCallback(async () => {
-    if (!socket || !incomingCall) return;
-    
-    debug(`Accepting call from ${incomingCall.callerName} (${incomingCall.callerId})`);
-    
-    try {
-      // Create a new call object
-      const newCall: Call = {
-        id: incomingCall.callId,
-        callerId: incomingCall.callerId,
-        callerName: incomingCall.callerName,
-        targetId: SESSION_USER_ID,
-        status: 'connected',
-        startTime: Date.now(),
-      };
-      
-      setCurrentCall(newCall);
-      
-      // Emit call:accept event to notify the caller
-      socket.emit('call:accept', {
-        callId: incomingCall.callId,
-        targetId: incomingCall.callerId,
-      });
-      
-      // Clear incoming call
-      setIncomingCall(null);
-      
-      // Create peer connection as non-initiator
-      // We'll wait for the signal from the caller before creating the peer
-      debug('Waiting for signal from caller to create peer connection');
-      
-    } catch (err) {
-      debug('Error accepting call:', err);
-      
-      // Reject the call if there's an error
-      socket.emit('call:reject', {
-        callId: incomingCall.callId,
-        targetId: incomingCall.callerId,
-      });
-      
-      setIncomingCall(null);
+    if (!socket || !isConnected || !incomingCall) {
+      console.error('Cannot accept call: Socket not connected or no incoming call');
+      return;
     }
-  }, [socket, incomingCall]);
+    
+    debug('Accepting call:', incomingCall);
+    
+    const { callId, callerId, callerName } = incomingCall;
+    
+    // Notify server that call is accepted
+    socket.emit('call:accept', {
+      callId,
+      targetId: SESSION_USER_ID
+    });
+    
+    // Create call object
+    setCurrentCall({
+      id: callId,
+      callerId,
+      callerName,
+      targetId: SESSION_USER_ID,
+      status: 'connected',
+      startTime: Date.now()
+    });
+    
+    // Clear incoming call
+    setIncomingCall(null);
+    
+    // Initialize WebRTC as the receiver (not initiator)
+    initializeWebRTC(callId, callerId, false);
+  }, [socket, isConnected, incomingCall]);
   
   // Reject an incoming call
   const rejectCall = useCallback(() => {

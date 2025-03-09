@@ -189,6 +189,13 @@ app.prepare().then(() => {
         callerName,
       });
       
+      // Also notify the caller about the call ID
+      socket.emit('call:started', {
+        callId,
+        targetId,
+        targetName: targetUser.userName
+      });
+      
       // Emit activity
       const activity = {
         id: `activity-${Date.now()}`,
@@ -414,8 +421,8 @@ app.prepare().then(() => {
     });
   });
 
-  // Try to find an available port starting from 3000
-  findAvailablePort(3000, (err, port) => {
+  // Try to find an available port starting from 3010
+  findAvailablePort(3010, (err, port) => {
     if (err) {
       console.error('Could not find an available port:', err);
       process.exit(1);

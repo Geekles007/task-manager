@@ -37,6 +37,13 @@ export const ConnectionControl: FC<ConnectionControlProps> = ({ className }) => 
     }
   }, [userId, userName]);
   
+  // Auto-connect on component mount
+  useEffect(() => {
+    if (!isConnected && connectionStatus === 'idle') {
+      handleConnect();
+    }
+  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  
   const handleConnect = () => {
     setConnectionStatus('connecting');
     console.log('Connecting with user:', { userId, userName });
@@ -49,92 +56,94 @@ export const ConnectionControl: FC<ConnectionControlProps> = ({ className }) => 
   };
   
   const handleRandomizeUser = () => {
-    const newUserId = `user-${Math.floor(Math.random() * 1000)}`;
-    const newUserName = `User ${Math.floor(Math.random() * 1000)}`;
+    const newUserId = `user-${Math.floor(Math.random() * 10000)}`;
+    const newUserName = `User ${Math.floor(Math.random() * 10000)}`;
     
     setUserId(newUserId);
     setUserName(newUserName);
     
-    if (isConnected && socket) {
-      socket.emit('user:active', {
-        userId: newUserId,
-        userName: newUserName,
-      });
+    // If connected, disconnect and reconnect with new identity
+    if (isConnected) {
+      disconnect();
+      setTimeout(() => {
+        connect(newUserId, newUserName);
+      }, 500);
     }
   };
   
   return (
-    <div className={cn("bg-gray-800 rounded-lg p-4", className)}>
-      <h2 className="text-lg font-semibold text-white mb-4">Connection Control</h2>
+    <div className={cn("p-4 bg-gray-800 rounded-md", className)}>
+      <h3 className="text-sm font-semibold text-white mb-3">Connection</h3>
       
-      <div className="space-y-4">
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">User ID</label>
+          <input
+            type="text"
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            disabled={isConnected}
+            className={cn(
+              "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-sm text-white",
+              isConnected && "opacity-70 cursor-not-allowed"
+            )}
+          />
+        </div>
+        
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">User Name</label>
+          <input
+            type="text"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            disabled={isConnected}
+            className={cn(
+              "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-sm text-white",
+              isConnected && "opacity-70 cursor-not-allowed"
+            )}
+          />
+        </div>
+        
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className={cn(
-              "w-3 h-3 rounded-full", 
-              isConnected ? "bg-green-500" : 
-              connectionStatus === 'connecting' ? "bg-yellow-500 animate-pulse" : 
-              "bg-red-500"
+              "w-2 h-2 rounded-full",
+              connectionStatus === 'connected' && "bg-green-500",
+              connectionStatus === 'connecting' && "bg-yellow-500",
+              connectionStatus === 'disconnected' && "bg-red-500",
+              connectionStatus === 'disconnecting' && "bg-orange-500",
+              connectionStatus === 'idle' && "bg-gray-500"
             )} />
-            <span className="text-sm text-gray-300">
-              {connectionStatus === 'connecting' ? "Connecting..." : 
-               connectionStatus === 'disconnecting' ? "Disconnecting..." : 
-               isConnected ? "Connected" : "Disconnected"}
-            </span>
+            <span className="text-xs text-gray-300 capitalize">{connectionStatus}</span>
           </div>
           
-          <div className="flex items-center gap-2">
-            {isConnected ? (
-              <Button 
-                variant="danger" 
-                size="sm" 
-                onClick={handleDisconnect}
-                disabled={connectionStatus === 'disconnecting'}
-              >
-                {connectionStatus === 'disconnecting' ? 'Disconnecting...' : 'Disconnect'}
-              </Button>
-            ) : (
-              <Button 
-                variant="primary" 
-                size="sm" 
-                onClick={handleConnect}
-                disabled={connectionStatus === 'connecting'}
-              >
-                {connectionStatus === 'connecting' ? 'Connecting...' : 'Connect'}
-              </Button>
-            )}
-          </div>
+          <button
+            onClick={handleRandomizeUser}
+            className="text-xs text-indigo-400 hover:text-indigo-300"
+            disabled={connectionStatus === 'connecting' || connectionStatus === 'disconnecting'}
+          >
+            Randomize
+          </button>
         </div>
         
-        <div className="space-y-2">
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-400 mb-1">User ID</label>
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-          
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-400 mb-1">User Name</label>
-            <input
-              type="text"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-          
-          <Button 
-            variant="secondary" 
-            size="sm" 
-            onClick={handleRandomizeUser}
-            className="w-full mt-2"
-          >
-            Randomize User
-          </Button>
+        <div className="flex gap-2">
+          {!isConnected ? (
+            <Button
+              onClick={handleConnect}
+              disabled={connectionStatus === 'connecting'}
+              className="w-full"
+            >
+              {connectionStatus === 'connecting' ? 'Connecting...' : 'Connect'}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleDisconnect}
+              disabled={connectionStatus === 'disconnecting'}
+              className="w-full bg-red-600 hover:bg-red-700"
+            >
+              {connectionStatus === 'disconnecting' ? 'Disconnecting...' : 'Disconnect'}
+            </Button>
+          )}
         </div>
       </div>
     </div>

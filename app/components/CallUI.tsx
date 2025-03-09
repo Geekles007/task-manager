@@ -49,65 +49,78 @@ export const CallUI: FC<CallUIProps> = ({ className }) => {
       const oscillator = audioContextRef.current.createOscillator();
       const gainNode = audioContextRef.current.createGain();
       
+      // Configure oscillator
       oscillator.type = 'sine';
-      oscillator.frequency.value = 800;
-      gainNode.gain.value = 0.2;
+      oscillator.frequency.setValueAtTime(440, audioContextRef.current.currentTime); // A4 note
       
+      // Configure gain node
+      gainNode.gain.setValueAtTime(0.2, audioContextRef.current.currentTime);
+      
+      // Connect nodes
       oscillator.connect(gainNode);
       gainNode.connect(audioContextRef.current.destination);
+      
+      // Start oscillator
+      oscillator.start();
       
       // Store references
       oscillatorRef.current = oscillator;
       gainNodeRef.current = gainNode;
-      
-      // Start oscillator
-      oscillator.start();
       isPlayingRef.current = true;
       
-      // Beep pattern (500ms on, 500ms off)
-      const id = window.setInterval(() => {
-        if (gainNodeRef.current) {
-          gainNodeRef.current.gain.value = gainNodeRef.current.gain.value > 0 ? 0 : 0.2;
+      // Create a pattern of rings
+      let isOn = true;
+      intervalIdRef.current = window.setInterval(() => {
+        if (!gainNodeRef.current) return;
+        
+        if (isOn) {
+          gainNodeRef.current.gain.setValueAtTime(0, audioContextRef.current!.currentTime);
+        } else {
+          gainNodeRef.current.gain.setValueAtTime(0.2, audioContextRef.current!.currentTime);
         }
-      }, 500);
-      
-      // Store interval ID for cleanup
-      intervalIdRef.current = id;
+        
+        isOn = !isOn;
+      }, 1000);
     } catch (err) {
       console.error('Error playing ringtone:', err);
     }
   };
   
   const stopRingtone = () => {
-    // Clear interval
-    if (intervalIdRef.current) {
-      window.clearInterval(intervalIdRef.current);
-      intervalIdRef.current = null;
-    }
+    if (!isPlayingRef.current) return;
     
-    // Stop oscillator
-    if (oscillatorRef.current && isPlayingRef.current) {
-      try {
+    try {
+      // Stop interval
+      if (intervalIdRef.current) {
+        clearInterval(intervalIdRef.current);
+        intervalIdRef.current = null;
+      }
+      
+      // Stop oscillator
+      if (oscillatorRef.current) {
         oscillatorRef.current.stop();
         oscillatorRef.current.disconnect();
         oscillatorRef.current = null;
-        
-        if (gainNodeRef.current) {
-          gainNodeRef.current.disconnect();
-          gainNodeRef.current = null;
-        }
-        
-        isPlayingRef.current = false;
-      } catch (err) {
-        console.error('Error stopping ringtone:', err);
       }
+      
+      // Disconnect gain node
+      if (gainNodeRef.current) {
+        gainNodeRef.current.disconnect();
+        gainNodeRef.current = null;
+      }
+      
+      isPlayingRef.current = false;
+    } catch (err) {
+      console.error('Error stopping ringtone:', err);
     }
   };
   
-  // Play ringtone for incoming calls
+  // Play ringtone when there's an incoming call
   useEffect(() => {
     if (incomingCall) {
       playRingtone();
+    } else {
+      stopRingtone();
     }
     
     return () => {
@@ -117,15 +130,16 @@ export const CallUI: FC<CallUIProps> = ({ className }) => {
   
   // Update call duration
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: number | null = null;
     
     if (currentCall && currentCall.status === 'connected') {
-      interval = setInterval(() => {
-        const duration = Math.floor((Date.now() - currentCall.startTime) / 1000);
-        setCallDuration(duration);
-      }, 1000);
-    } else {
+      // Reset duration when call starts
       setCallDuration(0);
+      
+      // Start timer
+      interval = window.setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
     }
     
     return () => {
@@ -135,99 +149,110 @@ export const CallUI: FC<CallUIProps> = ({ className }) => {
     };
   }, [currentCall]);
   
-  // Format call duration
+  // Format duration as MM:SS
   const formatDuration = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
-  // If there's no call or incoming call, don't render anything
+  // Handle call actions
+  const handleAcceptCall = () => {
+    stopRingtone();
+    acceptCall();
+  };
+  
+  const handleRejectCall = () => {
+    stopRingtone();
+    rejectCall();
+  };
+  
+  const handleEndCall = () => {
+    endCall();
+  };
+  
+  // Render nothing if there's no call
   if (!currentCall && !incomingCall) {
     return null;
   }
   
   return (
     <div className={cn(
-      "fixed bottom-20 right-4 bg-gray-800 rounded-lg shadow-lg p-4 w-80 z-50",
+      "fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50",
+      "w-80 bg-gray-800 rounded-lg shadow-lg border border-gray-700",
       className
     )}>
-      {incomingCall ? (
-        <div className="space-y-4">
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-white">Incoming Call</h3>
-            <p className="text-sm text-gray-400">from {incomingCall.callerName}</p>
+      {/* Incoming call UI */}
+      {incomingCall && !currentCall && (
+        <div className="p-4">
+          <div className="text-center mb-4">
+            <div className="text-lg font-semibold text-white">Incoming Call</div>
+            <div className="text-sm text-gray-400">{incomingCall.callerName}</div>
           </div>
           
-          <div className="flex justify-center space-x-4">
+          <div className="flex justify-center gap-4">
             <Button
-              variant="danger"
-              onClick={() => {
-                stopRingtone();
-                rejectCall();
-              }}
+              onClick={handleRejectCall}
+              className="bg-red-600 hover:bg-red-700"
             >
               Reject
             </Button>
             <Button
-              variant="primary"
-              onClick={() => {
-                stopRingtone();
-                acceptCall();
-              }}
+              onClick={handleAcceptCall}
+              className="bg-green-600 hover:bg-green-700"
             >
               Accept
             </Button>
           </div>
         </div>
-      ) : currentCall ? (
-        <div className="space-y-4">
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-white">
+      )}
+      
+      {/* Active call UI */}
+      {currentCall && (
+        <div className="p-4">
+          <div className="text-center mb-4">
+            <div className="text-lg font-semibold text-white">
               {currentCall.status === 'ringing' ? 'Calling...' : 
                currentCall.status === 'connected' ? 'On Call' : 
                currentCall.status === 'rejected' ? 'Call Rejected' : 
                'Call Ended'}
-            </h3>
-            <p className="text-sm text-gray-400">
-              {currentCall.targetName || currentCall.callerName}
-            </p>
+            </div>
+            <div className="text-sm text-gray-400">
+              {currentCall.callerId === currentCall.targetId ? 
+                currentCall.callerName : 
+                currentCall.targetName || 'Unknown'}
+            </div>
             {currentCall.status === 'connected' && (
-              <p className="text-xs text-gray-500 mt-1">{formatDuration(callDuration)}</p>
+              <div className="text-xs text-gray-500 mt-1">
+                {formatDuration(callDuration)}
+              </div>
             )}
           </div>
           
-          {currentCall.status === 'connected' && (
-            <div className="flex justify-center space-x-4">
-              <Button
-                variant="secondary"
+          <div className="flex justify-center gap-4">
+            {currentCall.status === 'connected' && (
+              <button
                 onClick={toggleMute}
-                className="w-12 h-12 rounded-full p-0 flex items-center justify-center"
+                className={cn(
+                  "p-2 rounded-full",
+                  isMuted ? "bg-red-600 hover:bg-red-700" : "bg-gray-700 hover:bg-gray-600"
+                )}
               >
-                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={endCall}
-                className="w-12 h-12 rounded-full p-0 flex items-center justify-center"
+                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+              </button>
+            )}
+            
+            {(currentCall.status === 'ringing' || currentCall.status === 'connected') && (
+              <button
+                onClick={handleEndCall}
+                className="p-2 rounded-full bg-red-600 hover:bg-red-700"
               >
-                <PhoneOff className="w-5 h-5" />
-              </Button>
-            </div>
-          )}
-          
-          {(currentCall.status === 'ringing' || currentCall.status === 'rejected' || currentCall.status === 'ended') && (
-            <div className="flex justify-center">
-              <Button
-                variant={currentCall.status === 'ringing' ? 'danger' : 'secondary'}
-                onClick={endCall}
-              >
-                {currentCall.status === 'ringing' ? 'Cancel' : 'Dismiss'}
-              </Button>
-            </div>
-          )}
+                <PhoneOff size={20} />
+              </button>
+            )}
+          </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 };
